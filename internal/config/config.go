@@ -4,31 +4,20 @@ import (
 	"log"
 	"os"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/ilyakaznacheev/cleanenv"
 )
 
 type Config struct {
-	Env     string  `yaml:"env" env-required:"true"`
-	Kafka   Kafka   `yaml:"kafka" env-required:"true"`
-	Storage Storage `yaml:"storage" env-required:"true"`
-}
-
-type Kafka struct {
-	Producer *kafka.ConfigMap `yaml:"producer" env-required:"true"`
-	Consumer *kafka.ConfigMap `yaml:"consumer" env-required:"true"`
-}
-
-type Storage struct {
-	Postgres Postgres `yaml:"postgres"`
+	Env      string   `yaml:"env" env-required:"true"`
+	Postgres Postgres `yaml:"postgres" env-required:"true"`
 }
 
 type Postgres struct {
+	Username string `yaml:"username" env-required:"true"`
+	Password string `yaml:"password" env-required:"true"`
 	Host     string `yaml:"host" env-required:"true"`
 	Port     string `yaml:"port" env-required:"true"`
 	Database string `yaml:"database" env-required:"true"`
-	Username string `yaml:"username" env-required:"true"`
-	Password string `yaml:"password" env-required:"true"`
 }
 
 func MustLoad() *Config {
@@ -38,7 +27,7 @@ func MustLoad() *Config {
 	}
 
 	if _, err := os.Stat(configPath); err != nil {
-		log.Fatalf("file doesn't exist: %s", configPath)
+		log.Fatalf("file '%s' doesn't exist: %v", configPath, err)
 	}
 
 	var cfg Config
