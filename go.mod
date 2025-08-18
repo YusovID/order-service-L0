@@ -7,9 +7,10 @@ require (
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 )
 
-require github.com/google/uuid v1.6.0
-
-require github.com/golang-migrate/migrate/v4 v4.18.3
+require (
+	github.com/golang-migrate/migrate/v4 v4.18.3
+	github.com/google/uuid v1.6.0
+)
 
 require (
 	github.com/hashicorp/errwrap v1.1.0 // indirect
