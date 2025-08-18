@@ -14,7 +14,6 @@ import (
 	"github.com/YusovID/order-service/internal/models"
 	"github.com/YusovID/order-service/internal/storage"
 	"github.com/YusovID/order-service/lib/logger/sl"
-	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
 
@@ -34,7 +33,7 @@ type Storage struct {
 }
 
 type OrderDB struct {
-	OrderUID        uuid.UUID
+	OrderUID        string
 	TrackNumber     string
 	CustomerID      string
 	DeliveryService string
@@ -46,7 +45,7 @@ type OrderDB struct {
 
 type ItemDB struct {
 	ID          int
-	OrderUID    uuid.UUID
+	OrderUID    string
 	ChrtID      int
 	TrackNumber string
 	Price       float64
@@ -103,16 +102,11 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 		}
 	}()
 
-	orderUID, err := uuid.Parse(orderData.OrderUID)
-	if err != nil {
-		return fmt.Errorf("%s: can't parse order uid: %v", fn, err)
-	}
-
-	if err := s.saveOrder(ctx, tx, orderData, orderUID); err != nil {
+	if err := s.saveOrder(ctx, tx, orderData); err != nil {
 		return fmt.Errorf("%s: can't save order: %v", fn, err)
 	}
 
-	if err := s.saveItems(ctx, tx, orderData.Items, orderUID); err != nil {
+	if err := s.saveItems(ctx, tx, orderData.Items, orderData.OrderUID); err != nil {
 		return fmt.Errorf("%s: can't save items: %v", fn, err)
 	}
 
@@ -123,7 +117,7 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	return nil
 }
 
-func (s *Storage) GetOrder(ctx context.Context, orderUID uuid.UUID) (*models.OrderData, error) {
+func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
 	const fn = "storage.postgres.GetOrder"
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault})
@@ -143,6 +137,11 @@ func (s *Storage) GetOrder(ctx context.Context, orderUID uuid.UUID) (*models.Ord
 		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
 	}
 
+	err = s.getItems(ctx, tx, orderData)
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't get items: %v", fn, err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("%s: can't commit transaction: %v", fn, err)
 	}
@@ -150,10 +149,10 @@ func (s *Storage) GetOrder(ctx context.Context, orderUID uuid.UUID) (*models.Ord
 	return orderData, nil
 }
 
-func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.OrderData, orderUID uuid.UUID) error {
+func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.OrderData) error {
 	fn := "storage.postgres.saveOrder"
 
-	order, err := convertOrder(orderData, orderUID)
+	order, err := convertOrder(orderData)
 	if err != nil {
 		return fmt.Errorf("%s: can't convert order: %v", fn, err)
 	}
@@ -173,7 +172,7 @@ func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.O
 	return nil
 }
 
-func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.Item, orderUID uuid.UUID) error {
+func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.Item, orderUID string) error {
 	fn := "storage.postgres.saveItems"
 
 	items, err := convertItems(orderUID, itemsData)
@@ -199,54 +198,117 @@ func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.
 	return nil
 }
 
-func (s *Storage) getOrder(ctx context.Context, tx *sql.Tx, orderUID uuid.UUID) (*models.OrderData, error) {
-	const fn = "storage.postgres.getOrder"
+func (s *Storage) getOrder(ctx context.Context, tx *sql.Tx, orderUID string) (*models.OrderData, error) {
+	orderDB := &OrderDB{}
 
-	orderData := &models.OrderData{}
+	orderRow := tx.QueryRowContext(ctx, "SELECT * FROM orders WHERE order_uid = ($1)", orderUID)
 
-	err := tx.QueryRowContext(ctx, "SELECT * FROM orders WHERE order_uid = ($1)", orderUID).Scan(&orderData)
+	err := orderRow.Scan(
+		&orderDB.OrderUID, &orderDB.TrackNumber, &orderDB.CustomerID, &orderDB.DeliveryService,
+		&orderDB.DateCreated, &orderDB.PaymentData, &orderDB.DeliveryData, &orderDB.AdditionalData,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, storage.ErrNoOrder
 		}
-		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
+		return nil, fmt.Errorf("can't scan order: %v", err)
 	}
 
-	items, err := tx.QueryContext(ctx, "SELECT * FROM order_items WHERE order_uid = ($1)", orderUID)
+	orderData := &models.OrderData{}
+
+	orderData.OrderUID = orderDB.OrderUID
+	orderData.TrackNumber = orderDB.TrackNumber
+	orderData.CustomerID = orderDB.CustomerID
+	orderData.DeliveryService = orderDB.DeliveryService
+	orderData.DateCreated = orderDB.DateCreated
+
+	deliveryData := models.Delivery{}
+	if err := json.Unmarshal(orderDB.DeliveryData, &deliveryData); err != nil {
+		return nil, fmt.Errorf("can't unmarshall delivery data")
+	}
+	orderData.Delivery = deliveryData
+
+	paymentData := models.Payment{}
+	if err := json.Unmarshal(orderDB.PaymentData, &paymentData); err != nil {
+		return nil, fmt.Errorf("can't unmarshall payment data")
+	}
+	orderData.Payment = paymentData
+
+	var Additional struct {
+		Entry             string `json:"entry"`
+		Locale            string `json:"locale"`
+		InternalSignature string `json:"internal_signature"`
+		Shardkey          string `json:"shardkey"`
+		SmID              int    `json:"sm_id"`
+		OofShard          string `json:"oof_shard"`
+	}
+
+	additinalData := Additional
+	if err := json.Unmarshal(orderDB.AdditionalData, &additinalData); err != nil {
+		return nil, fmt.Errorf("can't unmarshal additional data: %v", err)
+	}
+
+	orderData.Entry = additinalData.Entry
+	orderData.Locale = additinalData.Locale
+	orderData.InternalSignature = additinalData.InternalSignature
+	orderData.Shardkey = additinalData.Shardkey
+	orderData.SmID = additinalData.SmID
+	orderData.OofShard = additinalData.OofShard
+
+	return orderData, nil
+}
+
+func (s *Storage) getItems(ctx context.Context, tx *sql.Tx, orderData *models.OrderData) error {
+	items, err := tx.QueryContext(ctx, "SELECT * FROM order_items WHERE order_uid = ($1)", orderData.OrderUID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, storage.ErrEmptyOrder
+			return storage.ErrEmptyOrder
 		}
-		return nil, fmt.Errorf("%s: can't get items: %v", fn, err)
+		return fmt.Errorf("query error: %v", err)
 	}
 	defer items.Close()
 
 	for items.Next() {
-		var itemData models.Item
+		var itemDB ItemDB
 
 		if err := items.Scan(
-			&itemData.ChrtID, &itemData.TrackNumber, &itemData.Price, &itemData.Rid, &itemData.Name,
-			&itemData.Sale, &itemData.Size, &itemData.TotalPrice, &itemData.NmID, &itemData.Brand, &itemData.Status,
+			&itemDB.ID, &itemDB.OrderUID, &itemDB.ChrtID, &itemDB.TrackNumber,
+			&itemDB.Price, &itemDB.Rid, &itemDB.Name, &itemDB.Sale, &itemDB.Size,
+			&itemDB.TotalPrice, &itemDB.NmID, &itemDB.Brand, &itemDB.Status,
 		); err != nil {
-			return nil, fmt.Errorf("%s: can't scan item: %v", fn, err)
+			return fmt.Errorf("can't scan item: %v", err)
 		}
+
+		var itemData models.Item
+
+		itemData.ChrtID = itemDB.ChrtID
+		itemData.TrackNumber = itemDB.TrackNumber
+		itemData.Price = itemDB.Price
+		itemData.Rid = itemDB.Rid
+		itemData.Name = itemDB.Name
+		itemData.Sale = itemDB.Sale
+		itemData.Size = itemDB.Size
+		itemData.TotalPrice = itemDB.TotalPrice
+		itemData.NmID = itemDB.NmID
+		itemData.Brand = itemDB.Brand
+		itemData.Status = itemDB.Status
 
 		orderData.Items = append(orderData.Items, itemData)
 	}
 
 	if err := items.Err(); err != nil {
-		return nil, fmt.Errorf("%s: error while items iteration: %v", fn, err)
+		return fmt.Errorf("error while items iteration: %v", err)
 	}
 
-	return orderData, nil
+	return nil
 }
 
-func convertOrder(orderData *models.OrderData, orderUID uuid.UUID) (*OrderDB, error) {
+func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
 	fn := "storage.postgres.convertOrder"
 
 	order := &OrderDB{}
 
-	order.OrderUID = orderUID
+	order.OrderUID = orderData.OrderUID
 	order.TrackNumber = orderData.TrackNumber
 	order.CustomerID = orderData.CustomerID
 	order.DeliveryService = orderData.DeliveryService
@@ -292,7 +354,7 @@ func convertOrder(orderData *models.OrderData, orderUID uuid.UUID) (*OrderDB, er
 	return order, nil
 }
 
-func convertItems(orderUID uuid.UUID, itemsData []models.Item) ([]*ItemDB, error) {
+func convertItems(orderUID string, itemsData []models.Item) ([]*ItemDB, error) {
 	items := make([]*ItemDB, 0, len(itemsData))
 
 	for _, itemData := range itemsData {
