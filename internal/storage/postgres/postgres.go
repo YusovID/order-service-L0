@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/internal/models"
+	"github.com/YusovID/order-service/internal/storage"
 	"github.com/YusovID/order-service/lib/logger/sl"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
@@ -121,6 +123,33 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	return nil
 }
 
+func (s *Storage) GetOrder(ctx context.Context, orderUID uuid.UUID) (*models.OrderData, error) {
+	const fn = "storage.postgres.GetOrder"
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault})
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't start transaction: %v", fn, err)
+	}
+	defer func() {
+		if err != nil {
+			if txErr := tx.Rollback(); txErr != nil {
+				slog.Error("can't rollback transaction", slog.String("fn", fn), sl.Err(txErr))
+			}
+		}
+	}()
+
+	orderData, err := s.getOrder(ctx, tx, orderUID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("%s: can't commit transaction: %v", fn, err)
+	}
+
+	return orderData, nil
+}
+
 func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.OrderData, orderUID uuid.UUID) error {
 	fn := "storage.postgres.saveOrder"
 
@@ -168,6 +197,48 @@ func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.
 	}
 
 	return nil
+}
+
+func (s *Storage) getOrder(ctx context.Context, tx *sql.Tx, orderUID uuid.UUID) (*models.OrderData, error) {
+	const fn = "storage.postgres.getOrder"
+
+	orderData := &models.OrderData{}
+
+	err := tx.QueryRowContext(ctx, "SELECT * FROM orders WHERE order_uid = ($1)", orderUID).Scan(&orderData)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrNoOrder
+		}
+		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
+	}
+
+	items, err := tx.QueryContext(ctx, "SELECT * FROM order_items WHERE order_uid = ($1)", orderUID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrEmptyOrder
+		}
+		return nil, fmt.Errorf("%s: can't get items: %v", fn, err)
+	}
+	defer items.Close()
+
+	for items.Next() {
+		var itemData models.Item
+
+		if err := items.Scan(
+			&itemData.ChrtID, &itemData.TrackNumber, &itemData.Price, &itemData.Rid, &itemData.Name,
+			&itemData.Sale, &itemData.Size, &itemData.TotalPrice, &itemData.NmID, &itemData.Brand, &itemData.Status,
+		); err != nil {
+			return nil, fmt.Errorf("%s: can't scan item: %v", fn, err)
+		}
+
+		orderData.Items = append(orderData.Items, itemData)
+	}
+
+	if err := items.Err(); err != nil {
+		return nil, fmt.Errorf("%s: error while items iteration: %v", fn, err)
+	}
+
+	return orderData, nil
 }
 
 func convertOrder(orderData *models.OrderData, orderUID uuid.UUID) (*OrderDB, error) {
