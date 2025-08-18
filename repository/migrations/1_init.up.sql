@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS orders (
-    order_uid        UUID PRIMARY KEY,
+    order_uid        TEXT PRIMARY KEY,
     track_number     TEXT NOT NULL,
     customer_id      TEXT NOT NULL,
     delivery_service TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS orders (
 
 CREATE TABLE IF NOT EXISTS order_items (
     id           SERIAL PRIMARY KEY,
-    order_uid    UUID REFERENCES orders(order_uid) NOT NULL,
+    order_uid    TEXT REFERENCES orders(order_uid) NOT NULL,
     chrt_id      INTEGER NOT NULL,
 	track_number TEXT NOT NULL,
 	price        NUMERIC NOT NULL,
@@ -25,4 +25,4 @@ CREATE TABLE IF NOT EXISTS order_items (
 	status       INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX customer_id_idx ON orders (customer_id);
+CREATE UNIQUE INDEX IF NOT EXISTS customer_id_idx ON orders (customer_id);
