@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Env      string   `yaml:"env" env-required:"true"`
 	Postgres Postgres `yaml:"postgres" env-required:"true"`
+	Redis    Redis    `yaml:"redis" env-required:"true"`
 }
 
 type Postgres struct {
@@ -18,6 +19,13 @@ type Postgres struct {
 	Host     string `yaml:"host" env-required:"true"`
 	Port     string `yaml:"port" env-required:"true"`
 	Database string `yaml:"database" env-required:"true"`
+}
+
+type Redis struct {
+	Host     string `yaml:"host" env-required:"true"`
+	Port     string `yaml:"port" env-required:"true"`
+	DB       int    `yaml:"database"`
+	Password string `yaml:"password"`
 }
 
 func MustLoad() *Config {

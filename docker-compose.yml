@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:latest
-    container_name: postgres_db
+    container_name: postgres
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -17,6 +17,17 @@ services:
       timeout: 20s
       retries: 10
 
+  cache:
+    image: redis:latest
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes: 
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+      - cache-data:/data
+
   adminer:
     image: adminer:latest
     container_name: adminer
@@ -26,3 +37,5 @@ services:
 
 volumes:
   db-data:
+  cache-data:
+    driver: local
