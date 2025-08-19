@@ -2,16 +2,19 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 
 	"github.com/YusovID/order-service/internal/config"
+	"github.com/YusovID/order-service/internal/models"
+	"github.com/YusovID/order-service/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
 type Client struct {
-	Cli *redis.Client
+	*redis.Client
 }
 
 func New(ctx context.Context, cfg config.Redis, log *slog.Logger) (*Client, error) {
@@ -27,5 +30,42 @@ func New(ctx context.Context, cfg config.Redis, log *slog.Logger) (*Client, erro
 		return nil, fmt.Errorf("can't ping redis: %v", err)
 	}
 
-	return &Client{Cli: client}, nil
+	return &Client{client}, nil
+}
+
+func (c *Client) SaveOrder(ctx context.Context, orderData *models.OrderData) error {
+	const fn = "storage.redis.SaveOrder"
+
+	orderBytes, err := json.Marshal(orderData)
+	if err != nil {
+		return fmt.Errorf("%s: can't marshal order data: %v", fn, err)
+	}
+
+	if err := c.Set(ctx, orderData.OrderUID, orderBytes, 0).Err(); err != nil {
+		return fmt.Errorf("%s: can't set order: %v", fn, err)
+	}
+
+	return nil
+}
+
+func (c *Client) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
+	const fn = "storage.redis.GetOrder"
+
+	orderJSON, err := c.Get(ctx, orderUID).Result()
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
+	}
+
+	if orderJSON == "" {
+		return nil, storage.ErrNoOrder
+	}
+
+	orderData := &models.OrderData{}
+
+	err = json.Unmarshal([]byte(orderJSON), orderData)
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't unmarshal order json: %v", fn, err)
+	}
+
+	return orderData, nil
 }
