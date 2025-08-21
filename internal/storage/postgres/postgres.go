@@ -59,12 +59,7 @@ type ItemDB struct {
 	Status      int
 }
 
-func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
-	const fn = "storage.postgres.New"
-	log.With("fn", fn)
-
-	log.Info("starting storage initialization...")
-
+func New(cfg config.Postgres) (*Storage, error) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		cfg.Username,
 		cfg.Password,
@@ -76,12 +71,12 @@ func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	// open database
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("%s: can't open database: %v", fn, err)
+		return nil, fmt.Errorf("can't open database: %v", err)
 	}
 
 	// check if we can connect to database
 	if err = db.Ping(); err != nil {
-		return nil, fmt.Errorf("%s: can't connect to database: %v", fn, err)
+		return nil, fmt.Errorf("can't connect to database: %v", err)
 	}
 
 	return &Storage{db: db}, nil

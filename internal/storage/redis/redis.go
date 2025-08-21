@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 
 	"github.com/YusovID/order-service/internal/config"
@@ -17,7 +16,7 @@ type Client struct {
 	*redis.Client
 }
 
-func New(ctx context.Context, cfg config.Redis, log *slog.Logger) (*Client, error) {
+func New(ctx context.Context, cfg config.Redis) (*Client, error) {
 	address := net.JoinHostPort(cfg.Host, cfg.Port)
 
 	client := redis.NewClient(&redis.Options{
