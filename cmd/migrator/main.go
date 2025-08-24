@@ -29,7 +29,6 @@ func init() {
 
 func main() {
 	migration := MustLoad()
-	log.Printf("%s?sslmode=disable&x-migrations-table=%s", migration.ConnStr, migration.MigrationsTable)
 
 	m, err := migrate.New(
 		"file://"+migration.MigrationsPath,
