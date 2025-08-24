@@ -23,6 +23,7 @@ var (
 
 func GenerateOrder() []byte {
 	orderUID := uuid.New().String()
+	customerUID := uuid.New().String()
 	transactionID := orderUID
 	dateCreated := time.Now().UTC()
 
@@ -71,7 +72,7 @@ func GenerateOrder() []byte {
 		Items:             items,
 		Locale:            "en",
 		InternalSignature: "",
-		CustomerID:        "test",
+		CustomerID:        customerUID,
 		DeliveryService:   randomChoice(deliveryServices),
 		Shardkey:          fmt.Sprint(randomInt(1, 9)),
 		SmID:              randomInt(1, 100),
