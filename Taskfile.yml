@@ -1,0 +1,68 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  KAFKA_TOPIC: 'orders'
+
+tasks:
+  go:run_order_service:
+    desc: "runs order service"
+    cmds:
+      - go run cmd/order-service/main.go
+    silent: true
+
+  go:run_migrator:
+    desc: "runs migrations for database"
+    cmds:
+      - go run cmd/migrator/main.go
+    silent: true
+
+  go:run_order_generator:
+    cmds:
+      - go run cmd/order-generator/main.go
+    silent: true
+
+  go:tidy:
+    desc: "synchronizes go dependencies"
+    cmds:
+      - go mod tidy
+    silent: true
+
+  go:fmt:
+    desc: "formats all .go files"
+    cmds:
+      - go fmt ./...
+    silent: true
+
+  docker:up:
+    cmds:
+      - docker compose up -d
+    silent: true
+  
+  docker:down:
+    cmds:
+      - docker compose down -v
+    silent: true
+  
+  docker:restart:
+    cmds:
+      - docker compose restart
+    silent: true
+
+  docker:list:
+    cmds:
+      - docker ps
+    silent: true
+
+  kafka:create_topic:
+    desc: "creates topic '{{.KAFKA_TOPIC}}' for kafka"
+    cmds:
+      - docker exec --workdir /opt/kafka/bin/ -it kafka sh ./kafka-topics.sh --create --topic {{.KAFKA_TOPIC}} --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+    silent: true
+
+  default:
+    desc: "lists all task cmds"
+    cmds:
+      - task --list-all
+    silent: true
