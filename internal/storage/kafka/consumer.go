@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/lib/logger/sl"
 )
+
+const batchsize = 100
 
 type Consumer struct {
 	Consumer sarama.ConsumerGroup
@@ -21,7 +22,7 @@ func NewConsumer(cfg config.Kafka, log *slog.Logger) (*Consumer, error) {
 	config := sarama.NewConfig()
 
 	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = sarama.OffsetNewest
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	config.Consumer.IsolationLevel = sarama.ReadCommitted
 	config.Consumer.Offsets.AutoCommit.Enable = false
 
@@ -36,24 +37,31 @@ func NewConsumer(cfg config.Kafka, log *slog.Logger) (*Consumer, error) {
 	}, nil
 }
 
-func (c *Consumer) ProcessMessages(ctx context.Context, topic string, wg *sync.WaitGroup) {
+func (c *Consumer) ProcessMessages(ctx context.Context, topic string, orderChan chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		default:
-			if err := c.Consumer.Consume(ctx, []string{topic}, &consumerHandler{Log: c.Log}); err != nil {
-				c.Log.Error("error from consumer", sl.Err(err))
+		err := c.Consumer.Consume(ctx, []string{topic}, &consumerHandler{
+			OrderChan: orderChan,
+			Log:       c.Log,
+		})
+		if err != nil {
+			if err == sarama.ErrClosedConsumerGroup {
+				c.Log.Info("consumer group closed, exiting process messages loop")
+				return
 			}
+			c.Log.Error("error from consumer", sl.Err(err))
+		}
+
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
 
 type consumerHandler struct {
-	Log *slog.Logger
+	OrderChan chan []byte
+	Log       *slog.Logger
 }
 
 func (h *consumerHandler) Setup(sarama.ConsumerGroupSession) error {
@@ -65,23 +73,26 @@ func (h *consumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
 }
 
 func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	go func() {
-		for range ticker.C {
-			session.Commit()
-		}
-	}()
+	processed := 0
 
 	for msg := range claim.Messages() {
 		h.Log.Info(
 			"recieved message",
-			slog.String("key", string(msg.Key)),
-			slog.String("value", string(msg.Value)),
+			slog.Int("partition", int(msg.Partition)),
+			slog.Int("offset", int(msg.Offset)),
 		)
 
 		session.MarkMessage(msg, "")
+
+		processed++
+
+		if processed >= batchsize {
+			h.Log.Info("commiting messages")
+			session.Commit()
+			processed = 0
+		}
+
+		h.OrderChan <- msg.Value
 	}
 
 	session.Commit()
