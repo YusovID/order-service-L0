@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/YusovID/order-service/internal/config"
@@ -29,7 +30,8 @@ var (
 )
 
 type Storage struct {
-	db *sql.DB
+	db  *sql.DB
+	log *slog.Logger
 }
 
 type OrderDB struct {
@@ -59,7 +61,7 @@ type ItemDB struct {
 	Status      int
 }
 
-func New(cfg config.Postgres) (*Storage, error) {
+func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		cfg.Username,
 		cfg.Password,
@@ -79,7 +81,46 @@ func New(cfg config.Postgres) (*Storage, error) {
 		return nil, fmt.Errorf("can't connect to database: %v", err)
 	}
 
-	return &Storage{db: db}, nil
+	return &Storage{
+		db:  db,
+		log: log,
+	}, nil
+}
+
+func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	const fn = "storage.postgres.ProcessOrder"
+	s.log.With("fn", fn)
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.log.Info("stopped processing order")
+			return
+
+		case order := <-orderChan:
+			go func() {
+				s.log.Info("saving order in database")
+
+				var orderData *models.OrderData
+
+				err := json.Unmarshal(order, &orderData)
+				if err != nil {
+					s.log.Error("can't unmarshal json", sl.Err(err))
+					return
+				}
+
+				err = s.SaveOrder(ctx, orderData)
+				if err != nil {
+					s.log.Info("failed to save order: %v", sl.Err(err))
+					return
+				}
+
+				s.log.Info("saving was succesful")
+			}()
+		}
+	}
 }
 
 func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (err error) {
