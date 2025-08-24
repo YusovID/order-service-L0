@@ -9,8 +9,8 @@ require (
 
 require (
 	github.com/IBM/sarama v1.45.2
-	github.com/confluentinc/confluent-kafka-go v1.9.2
 	github.com/golang-migrate/migrate/v4 v4.18.3
+	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.12.1
 )
 
