@@ -3,15 +3,17 @@ package config
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
 )
 
 type Config struct {
-	Env      string   `yaml:"env" env:"ENV" env-required:"true"`
-	Postgres Postgres `yaml:"postgres" env-required:"true"`
-	Redis    Redis    `yaml:"redis" env-required:"true"`
-	Kafka    Kafka    `yaml:"kafka" env-required:"true"`
+	Env        string     `yaml:"env" env:"ENV" env-required:"true"`
+	Postgres   Postgres   `yaml:"postgres" env-required:"true"`
+	Redis      Redis      `yaml:"redis" env-required:"true"`
+	Kafka      Kafka      `yaml:"kafka" env-required:"true"`
+	HTTPServer HTTPServer `yaml:"http_server" env-required:"true"`
 }
 
 type Postgres struct {
@@ -49,6 +51,12 @@ type Consumer struct {
 	EnableAutoCommit bool   `yaml:"enable.auto.commit"`
 	SecurityProtocol string `yaml:"security.protocol"`
 	IsolationLevel   int8   `yaml:"isolation.level"`
+}
+
+type HTTPServer struct {
+	Address     string        `yaml:"address" env-required:"true"`
+	Timeout     time.Duration `yaml:"timeout" env-default:"4s"`
+	IdleTimeout time.Duration `yaml:"idle_timeout" env-default:"60s"`
 }
 
 func MustLoad() *Config {
