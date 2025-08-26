@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,15 +12,7 @@ import (
 	"github.com/YusovID/order-service/internal/storage/kafka"
 	"github.com/YusovID/order-service/lib/logger/sl"
 	"github.com/YusovID/order-service/lib/logger/slogpretty"
-	"github.com/joho/godotenv"
 )
-
-func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("can't load env: %v", err)
-	}
-}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())

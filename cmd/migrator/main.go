@@ -11,20 +11,12 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/ilyakaznacheev/cleanenv"
-	"github.com/joho/godotenv"
 )
 
 type MigrationCfg struct {
 	ConnStr         string
 	MigrationsPath  string
 	MigrationsTable string
-}
-
-func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("can't load config: %v", err)
-	}
 }
 
 func main() {
