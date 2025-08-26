@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 
@@ -51,12 +52,11 @@ func (c *Client) GetOrder(ctx context.Context, orderUID string) (*models.OrderDa
 	const fn = "storage.redis.GetOrder"
 
 	orderJSON, err := c.Get(ctx, orderUID).Result()
+	if errors.Is(err, redis.Nil) {
+		return nil, storage.ErrNoOrder
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
-	}
-
-	if orderJSON == "" {
-		return nil, storage.ErrNoOrder
 	}
 
 	orderData := &models.OrderData{}
