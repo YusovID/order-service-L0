@@ -7,6 +7,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY web/ /app/web/
 
 WORKDIR /app/cmd/order-service
 
@@ -18,6 +19,7 @@ WORKDIR /
 
 COPY --from=builder /order-service /order-service
 COPY ./config/local.yml /config/local.yml
+COPY --from=builder /app/web/ /web/
 
 EXPOSE 8080
 
