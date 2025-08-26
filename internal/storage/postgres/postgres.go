@@ -91,7 +91,7 @@ func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *s
 	defer wg.Done()
 
 	const fn = "storage.postgres.ProcessOrder"
-	s.log.With("fn", fn)
+	s.log = s.log.With("fn", fn)
 
 	for {
 		select {
