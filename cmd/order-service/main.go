@@ -81,6 +81,8 @@ func main() {
 
 	router.Get("/order/{order_uid}", get.New(ctx, log, cache, storage))
 
+	router.Handle("/", http.FileServer(http.Dir("./web")))
+
 	log.Info("starting server", slog.String("address", cfg.HTTPServer.Address))
 
 	srv := &http.Server{
