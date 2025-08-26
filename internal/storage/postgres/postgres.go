@@ -101,7 +101,7 @@ func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *s
 
 		case order := <-orderChan:
 			go func() {
-				s.log.Info("saving order in database")
+				s.log.Info("recieved new order")
 
 				var orderData *models.OrderData
 
@@ -111,9 +111,11 @@ func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *s
 					return
 				}
 
+				s.log.Info("saving order in database")
+
 				err = s.SaveOrder(ctx, orderData)
 				if err != nil {
-					s.log.Info("failed to save order: %v", sl.Err(err))
+					s.log.Info("failed to save order in database", sl.Err(err))
 					return
 				}
 
