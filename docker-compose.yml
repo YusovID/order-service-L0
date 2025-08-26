@@ -1,4 +1,80 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: ./cmd/order-service/Dockerfile
+    container_name: order_service
+    restart:
+      always
+    environment:
+      - CONFIG_PATH=${CONFIG_PATH}
+      - ENV=${ENV}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_DB=${REDIS_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+    ports:
+      - 8080:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      migrator:
+        condition: service_started
+    networks:
+      - app-net
+
+  generator:
+    build:
+      context: .
+      dockerfile: ./cmd/order-generator/Dockerfile
+    container_name: order_generator
+    restart:
+      always
+    environment:
+      - CONFIG_PATH=${CONFIG_PATH}
+      - ENV=${ENV}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+    ports:
+      - 8081:8081
+    depends_on:
+      app:
+        condition: service_started
+    networks:
+      - app-net
+
+  migrator:
+    build:
+      context: .
+      dockerfile: ./cmd/migrator/Dockerfile
+    container_name: migrator
+    environment:
+      - CONFIG_PATH=${CONFIG_PATH}
+      - ENV=${ENV}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - MIGRATIONS_PATH=${MIGRATIONS_PATH}
+      - MIGRATIONS_TABLE=${MIGRATIONS_TABLE}
+    ports:
+      - 8082:8082
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-net
+
   postgres:
     image: postgres:latest
     container_name: postgres
@@ -6,6 +82,8 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
@@ -29,6 +107,13 @@ services:
     volumes: 
       - ./redis.conf:/usr/local/etc/redis/redis.conf
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 20s
+      retries: 10
+    networks:
+      - app-net
 
   kafka:
     image: apache/kafka:latest
@@ -39,10 +124,10 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -58,7 +143,7 @@ services:
     container_name: adminer
     restart: always
     ports:
-      - "8081:8080"
+      - "8083:8080"
     depends_on:
       - postgres
     networks:
@@ -68,9 +153,9 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     ports:
-      - "8082:8080"
+      - "8084:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_NAME: kafka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     depends_on:
       - kafka
