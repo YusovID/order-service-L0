@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Информация о заказе</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        input[type="text"] {
+            width: calc(100% - 100px);
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        button {
+            width: 90px;
+            padding: 10px;
+            background-color: #5cb85c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #4cae4c;
+        }
+
+        pre {
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+
+        .response-time {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Поиск информации о заказе</h1>
+        <div>
+            <input type="text" id="order_uid_input" placeholder="Введите ID заказа">
+            <button onclick="fetchOrder()">Найти</button>
+        </div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function fetchOrder() {
+            const order_uid = document.getElementById('order_uid_input').value.trim();
+            const resultDiv = document.getElementById('result');
+
+            if (!order_uid) {
+                resultDiv.innerHTML = '<p class="error">Пожалуйста, введите ID заказа.</p>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<p>Загрузка...</p>';
+            const startTime = performance.now(); // Записываем время начала запроса
+
+            try {
+                const response = await fetch(`http://localhost:8080/order/${order_uid}`);
+                const endTime = performance.now(); // Записываем время окончания запроса
+                const responseTime = (endTime - startTime).toFixed(2); // Вычисляем время ответа в мс
+
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error('Заказ не найден.');
+                    }
+                    throw new Error('Ошибка при получении данных.');
+                }
+
+                const data = await response.json();
+                resultDiv.innerHTML = `
+                    <h3>Данные заказа:</h3>
+                    <p class="response-time">Время ответа: ${responseTime} мс</p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `<p class="error">${error.message}</p>`;
+            }
+        }
+    </script>
+
+</body>
+
+</html>
