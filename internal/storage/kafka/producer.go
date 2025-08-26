@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	MaxTimeToSleep = 10
+	MaxTimeToSleep = 1000
 )
 
 type Producer struct {
@@ -93,7 +93,7 @@ func (p *Producer) ProduceMessage(ctx context.Context, topic string, wg *sync.Wa
 
 			timeToSleep := rand.IntN(MaxTimeToSleep + 1)
 
-			time.Sleep(time.Duration(timeToSleep) * time.Second)
+			time.Sleep(time.Duration(timeToSleep) * time.Millisecond)
 		}
 	}
 }
