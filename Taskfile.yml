@@ -9,7 +9,7 @@ tasks:
   go:run_order_service:
     desc: "runs order service"
     cmds:
-      - go run cmd/order-service/main.go
+      - CONFIG_PATH="./config/local.yml" ENV="local" go run cmd/order-service/main.go
     silent: true
 
   go:run_migrator:
