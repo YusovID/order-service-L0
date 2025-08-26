@@ -2,35 +2,31 @@ package get
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/YusovID/order-service/internal/models"
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/render"
-	"github.com/go-playground/validator/v10"
 
 	strg "github.com/YusovID/order-service/internal/storage"
 	resp "github.com/YusovID/order-service/lib/api/response"
 	"github.com/YusovID/order-service/lib/logger/sl"
 )
 
-type Request struct {
-	ID string `json:"id" validate:"required,uuid"`
-}
-
 type Response struct {
 	resp.Response
-	Order []byte `json:"order"`
+	Order *models.OrderData `json:"order"`
 }
 
-type OrderGetter interface {
+type Storage interface {
+	SaveOrder(ctx context.Context, orderData *models.OrderData) error
 	GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error)
 }
 
-func New(ctx context.Context, log *slog.Logger, cache OrderGetter, storage OrderGetter) http.HandlerFunc {
+func New(ctx context.Context, log *slog.Logger, cache Storage, storage Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const fn = "handlers.url.get.New"
 
@@ -39,45 +35,44 @@ func New(ctx context.Context, log *slog.Logger, cache OrderGetter, storage Order
 			slog.String("request_id", middleware.GetReqID(r.Context())),
 		)
 
-		var req Request
+		orderUID := chi.URLParam(r, "order_uid")
+		if orderUID == "" {
+			log.Error("order uid is empty")
 
-		err := render.DecodeJSON(r.Body, &req)
-		if err != nil {
-			log.Error("failed to decode json body", sl.Err(err))
-
-			render.JSON(w, r, resp.Error("failed to decode request"))
+			render.JSON(w, r, resp.Error("order uid is empty"))
 
 			return
 		}
 
-		log.Info("request body decoded", slog.Any("request", req))
-
-		if err := validator.New().Struct(req); err != nil {
-			validateErr := err.(validator.ValidationErrors)
-
-			log.Error("invalid request", sl.Err(err))
-
-			render.JSON(w, r, resp.ValidationError(validateErr))
-
-			return
-		}
+		log.Info("request recieved", slog.String("order uid", orderUID))
 
 		var orderData *models.OrderData
 
-		orderData, err = cache.GetOrder(ctx, req.ID)
+		orderData, err := cache.GetOrder(ctx, orderUID)
 		if errors.Is(err, strg.ErrNoOrder) {
-			orderData, err = storage.GetOrder(ctx, req.ID)
+			log.Info("order not found in cache")
+
+			orderData, err = storage.GetOrder(ctx, orderUID)
 			if errors.Is(err, strg.ErrNoOrder) {
-				log.Info("order not found", slog.String("order_uid", req.ID))
+				log.Info("order not found", slog.String("order_uid", orderUID))
 
 				render.JSON(w, r, resp.Error("order not found"))
 
 				return
 			}
+
+			go func() {
+				log.Info("saving order in cache")
+
+				err = cache.SaveOrder(ctx, orderData)
+				if err != nil {
+					log.Info("failed to save order in cache", sl.Err(err))
+				}
+			}()
 		}
 
 		if errors.Is(err, strg.ErrEmptyOrder) {
-			log.Info("empty order", slog.String("order_uid", req.ID))
+			log.Info("empty order", slog.String("order_uid", orderUID))
 
 			render.JSON(w, r, resp.Error("empty order"))
 
@@ -92,20 +87,11 @@ func New(ctx context.Context, log *slog.Logger, cache OrderGetter, storage Order
 			return
 		}
 
-		log.Info("got order successfully", slog.String("order_uid", req.ID))
-
-		order, err := json.Marshal(orderData)
-		if err != nil {
-			log.Error("failed to marshal order", sl.Err(err))
-
-			render.JSON(w, r, resp.Error("internal error"))
-
-			return
-		}
+		log.Info("got order successfully", slog.String("order_uid", orderUID))
 
 		render.JSON(w, r, Response{
 			Response: resp.OK(),
-			Order:    order,
+			Order:    orderData,
 		})
 	}
 }
