@@ -25,4 +25,4 @@ CREATE TABLE IF NOT EXISTS order_items (
 	status       INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS customer_id_idx ON orders (customer_id);
+CREATE INDEX IF NOT EXISTS customer_id_idx ON orders (customer_id);
