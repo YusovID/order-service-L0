@@ -50,6 +50,11 @@ type ItemDB struct {
 	Status      int     `db:"status"`
 }
 
+type JoinedRow struct {
+	OrderDB
+	ItemDB
+}
+
 func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database,
@@ -187,11 +192,6 @@ func (s *Storage) saveItems(ctx context.Context, tx *sqlx.Tx, itemsData []models
 func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
 	const fn = "storage.postgres.GetOrder"
 
-	type JoinedRow struct {
-		OrderDB
-		ItemDB
-	}
-
 	query, args, err := s.sq.Select(
 		"o.order_uid", "o.track_number", "o.customer_id", "o.delivery_service",
 		"o.date_created", "o.payment_data", "o.delivery_data", "o.additional_data",
@@ -216,42 +216,67 @@ func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderD
 	}
 
 	firstRow := joinedRows[0]
-	orderData := &models.OrderData{
-		OrderUID:        firstRow.OrderDB.OrderUID,
-		TrackNumber:     firstRow.OrderDB.TrackNumber,
-		CustomerID:      firstRow.OrderDB.CustomerID,
-		DeliveryService: firstRow.OrderDB.DeliveryService,
-		DateCreated:     firstRow.OrderDB.DateCreated,
-		Items:           make([]models.Item, 0, len(joinedRows)),
-	}
-
-	if err := json.Unmarshal(firstRow.PaymentData, &orderData.Payment); err != nil {
-		return nil, fmt.Errorf("%s: can't unmarshal payment data: %v", fn, err)
-	}
-	if err := json.Unmarshal(firstRow.DeliveryData, &orderData.Delivery); err != nil {
-		return nil, fmt.Errorf("%s: can't unmarshal delivery data: %v", fn, err)
-	}
-	if err := json.Unmarshal(firstRow.AdditionalData, &orderData.AdditionalData); err != nil {
-		return nil, fmt.Errorf("%s: can't unmarshal additional data: %v", fn, err)
+	orderData, err := fillOrderData(firstRow)
+	if err != nil {
+		return nil, fmt.Errorf("%s: can't fill order data: %v", fn, err)
 	}
 
 	for _, row := range joinedRows {
-		orderData.Items = append(orderData.Items, models.Item{
-			ChrtID:      row.ItemDB.ChrtID,
-			TrackNumber: row.ItemDB.TrackNumber,
-			Price:       row.ItemDB.Price,
-			Rid:         row.ItemDB.Rid,
-			Name:        row.ItemDB.Name,
-			Sale:        row.ItemDB.Sale,
-			Size:        row.ItemDB.Size,
-			TotalPrice:  row.ItemDB.TotalPrice,
-			NmID:        row.ItemDB.NmID,
-			Brand:       row.ItemDB.Brand,
-			Status:      row.ItemDB.Status,
-		})
+		appendItems(row, orderData)
 	}
 
 	return orderData, nil
+}
+
+func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
+	const fn = "storage.postgres.GetOrders"
+
+	query, args, err := s.sq.Select(
+		"o.order_uid", "o.track_number", "o.customer_id", "o.delivery_service",
+		"o.date_created", "o.payment_data", "o.delivery_data", "o.additional_data",
+		"i.id", "i.chrt_id", "i.track_number", "i.price", "i.rid", "i.name",
+		"i.sale", "i.size", "i.total_price", "i.nm_id", "i.brand", "i.status",
+	).
+		From("orders o").
+		Join("order_items i ON o.order_uid = i.order_uid").
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to build get orders query: %v", fn, err)
+	}
+
+	var joinedRows []JoinedRow
+
+	if err := s.db.SelectContext(ctx, &joinedRows, query, args...); err != nil {
+		return nil, fmt.Errorf("%s: faield to execute get orders query: %v", fn, err)
+	}
+
+	if len(joinedRows) == 0 {
+		return nil, storage.ErrNoOrder
+	}
+
+	ordersMap := make(map[string]*models.OrderData)
+
+	for _, row := range joinedRows {
+		orderData, exists := ordersMap[row.OrderDB.OrderUID]
+		if !exists {
+			orderData, err := fillOrderData(row)
+			if err != nil {
+				return nil, fmt.Errorf("%s: can't fill order data: %v", fn, err)
+			}
+
+			ordersMap[row.OrderDB.OrderUID] = orderData
+		}
+
+		appendItems(row, orderData)
+	}
+
+	orders := make([]*models.OrderData, 0, len(ordersMap))
+
+	for _, order := range ordersMap {
+		orders = append(orders, order)
+	}
+
+	return orders, nil
 }
 
 func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
@@ -298,4 +323,43 @@ func convertItems(orderUID string, itemsData []models.Item) ([]ItemDB, error) {
 	}
 
 	return items, nil
+}
+
+func fillOrderData(row JoinedRow) (*models.OrderData, error) {
+	orderData := &models.OrderData{
+		OrderUID:        row.OrderDB.OrderUID,
+		TrackNumber:     row.OrderDB.TrackNumber,
+		CustomerID:      row.OrderDB.CustomerID,
+		DeliveryService: row.OrderDB.DeliveryService,
+		DateCreated:     row.OrderDB.DateCreated,
+		Items:           make([]models.Item, 0),
+	}
+
+	if err := json.Unmarshal(row.PaymentData, &orderData.Payment); err != nil {
+		return nil, fmt.Errorf("can't unmarshal payment data: %v", err)
+	}
+	if err := json.Unmarshal(row.DeliveryData, &orderData.Delivery); err != nil {
+		return nil, fmt.Errorf("can't unmarshal delivery data: %v", err)
+	}
+	if err := json.Unmarshal(row.AdditionalData, &orderData.AdditionalData); err != nil {
+		return nil, fmt.Errorf("can't unmarshal additional data: %v", err)
+	}
+
+	return orderData, nil
+}
+
+func appendItems(row JoinedRow, orderData *models.OrderData) {
+	orderData.Items = append(orderData.Items, models.Item{
+		ChrtID:      row.ItemDB.ChrtID,
+		TrackNumber: row.ItemDB.TrackNumber,
+		Price:       row.ItemDB.Price,
+		Rid:         row.ItemDB.Rid,
+		Name:        row.ItemDB.Name,
+		Sale:        row.ItemDB.Sale,
+		Size:        row.ItemDB.Size,
+		TotalPrice:  row.ItemDB.TotalPrice,
+		NmID:        row.ItemDB.NmID,
+		Brand:       row.ItemDB.Brand,
+		Status:      row.ItemDB.Status,
+	})
 }
