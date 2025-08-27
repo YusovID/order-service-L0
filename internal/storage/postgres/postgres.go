@@ -4,16 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/internal/models"
 	"github.com/YusovID/order-service/internal/storage"
+	"github.com/YusovID/order-service/lib/builder/sql/insert"
 	"github.com/YusovID/order-service/lib/logger/sl"
 	_ "github.com/lib/pq"
 )
@@ -100,6 +99,7 @@ func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *s
 			return
 
 		case order := <-orderChan:
+			// TODO реализовать worker pool
 			go func() {
 				s.log.Info("recieved new order")
 
@@ -135,7 +135,7 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	defer func() {
 		if err != nil {
 			if txErr := tx.Rollback(); txErr != nil {
-				slog.Error("can't rollback transaction", slog.String("fn", fn), sl.Err(txErr))
+				s.log.Error("can't rollback transaction", slog.String("fn", fn), sl.Err(txErr))
 			}
 		}
 	}()
@@ -155,38 +155,6 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	return nil
 }
 
-func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
-	const fn = "storage.postgres.GetOrder"
-
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault})
-	if err != nil {
-		return nil, fmt.Errorf("%s: can't start transaction: %v", fn, err)
-	}
-	defer func() {
-		if err != nil {
-			if txErr := tx.Rollback(); txErr != nil {
-				slog.Error("can't rollback transaction", slog.String("fn", fn), sl.Err(txErr))
-			}
-		}
-	}()
-
-	orderData, err := s.getOrder(ctx, tx, orderUID)
-	if err != nil {
-		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
-	}
-
-	err = s.getItems(ctx, tx, orderData)
-	if err != nil {
-		return nil, fmt.Errorf("%s: can't get items: %v", fn, err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("%s: can't commit transaction: %v", fn, err)
-	}
-
-	return orderData, nil
-}
-
 func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.OrderData) error {
 	fn := "storage.postgres.saveOrder"
 
@@ -195,7 +163,7 @@ func (s *Storage) saveOrder(ctx context.Context, tx *sql.Tx, orderData *models.O
 		return fmt.Errorf("%s: can't convert order: %v", fn, err)
 	}
 
-	orderQuery := buildInsertQuery("orders", 1, orderColumns)
+	orderQuery := insert.BuildQuery("orders", 1, orderColumns)
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -218,7 +186,7 @@ func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.
 		return fmt.Errorf("%s: can't convert items: %v", fn, err)
 	}
 
-	itemsQuery := buildInsertQuery("order_items", len(items), orderItemsColumns)
+	itemsQuery := insert.BuildQuery("order_items", len(items), orderItemsColumns)
 
 	itemsArgs := make([]any, 0, len(itemsData)*len(orderItemsColumns))
 
@@ -236,109 +204,95 @@ func (s *Storage) saveItems(ctx context.Context, tx *sql.Tx, itemsData []models.
 	return nil
 }
 
-func (s *Storage) getOrder(ctx context.Context, tx *sql.Tx, orderUID string) (*models.OrderData, error) {
-	orderDB := &OrderDB{}
+func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
+	const fn = "storage.postgres.GetOrder"
 
-	orderRow := tx.QueryRowContext(ctx, "SELECT * FROM orders WHERE order_uid = ($1)", orderUID)
-
-	err := orderRow.Scan(
-		&orderDB.OrderUID, &orderDB.TrackNumber, &orderDB.CustomerID, &orderDB.DeliveryService,
-		&orderDB.DateCreated, &orderDB.PaymentData, &orderDB.DeliveryData, &orderDB.AdditionalData,
-	)
+	orderData, err := s.getOrder(ctx, orderUID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, storage.ErrNoOrder
-		}
-		return nil, fmt.Errorf("can't scan order: %v", err)
+		return nil, fmt.Errorf("%s: can't get order: %v", fn, err)
 	}
-
-	orderData := &models.OrderData{}
-
-	orderData.OrderUID = orderDB.OrderUID
-	orderData.TrackNumber = orderDB.TrackNumber
-	orderData.CustomerID = orderDB.CustomerID
-	orderData.DeliveryService = orderDB.DeliveryService
-	orderData.DateCreated = orderDB.DateCreated
-
-	deliveryData := models.Delivery{}
-	if err := json.Unmarshal(orderDB.DeliveryData, &deliveryData); err != nil {
-		return nil, fmt.Errorf("can't unmarshall delivery data")
-	}
-	orderData.Delivery = deliveryData
-
-	paymentData := models.Payment{}
-	if err := json.Unmarshal(orderDB.PaymentData, &paymentData); err != nil {
-		return nil, fmt.Errorf("can't unmarshall payment data")
-	}
-	orderData.Payment = paymentData
-
-	var Additional struct {
-		Entry             string `json:"entry"`
-		Locale            string `json:"locale"`
-		InternalSignature string `json:"internal_signature"`
-		Shardkey          string `json:"shardkey"`
-		SmID              int    `json:"sm_id"`
-		OofShard          string `json:"oof_shard"`
-	}
-
-	additinalData := Additional
-	if err := json.Unmarshal(orderDB.AdditionalData, &additinalData); err != nil {
-		return nil, fmt.Errorf("can't unmarshal additional data: %v", err)
-	}
-
-	orderData.Entry = additinalData.Entry
-	orderData.Locale = additinalData.Locale
-	orderData.InternalSignature = additinalData.InternalSignature
-	orderData.Shardkey = additinalData.Shardkey
-	orderData.SmID = additinalData.SmID
-	orderData.OofShard = additinalData.OofShard
 
 	return orderData, nil
 }
 
-func (s *Storage) getItems(ctx context.Context, tx *sql.Tx, orderData *models.OrderData) error {
-	items, err := tx.QueryContext(ctx, "SELECT * FROM order_items WHERE order_uid = ($1)", orderData.OrderUID)
+func (s *Storage) getOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
+	query := `SELECT o.*, i.* FROM orders o
+	JOIN order_items i
+	ON o.order_uid = i.order_uid
+	WHERE order_uid = ($1)`
+
+	orderRows, err := s.db.QueryContext(ctx, query, orderUID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return storage.ErrEmptyOrder
-		}
-		return fmt.Errorf("query error: %v", err)
+		return nil, fmt.Errorf("can't do query: %v", err)
 	}
-	defer items.Close()
+	defer orderRows.Close()
 
-	for items.Next() {
-		var itemDB ItemDB
+	var orderData *models.OrderData
 
-		if err := items.Scan(
-			&itemDB.ID, &itemDB.OrderUID, &itemDB.ChrtID, &itemDB.TrackNumber,
-			&itemDB.Price, &itemDB.Rid, &itemDB.Name, &itemDB.Sale, &itemDB.Size,
-			&itemDB.TotalPrice, &itemDB.NmID, &itemDB.Brand, &itemDB.Status,
+	for orderRows.Next() {
+		var (
+			orderUID, trackNumber, customerID, deliveryService string
+			dateCreated                                        time.Time
+			paymentData, deliveryData, additionalData          []byte
+
+			id, chrtID, nmID, status                              int
+			itemOrderUID, itemTrackNumber, rid, name, size, brand string
+			price, sale, totalPrice                               float64
+		)
+
+		if err := orderRows.Scan(
+			&orderUID, &trackNumber, &customerID,
+			&deliveryService, &dateCreated,
+			&paymentData, &deliveryData, &additionalData,
+
+			&id, &itemOrderUID, &chrtID, &itemTrackNumber, &price, &rid, &name,
+			&sale, &size, &totalPrice, &nmID, &brand, &status,
 		); err != nil {
-			return fmt.Errorf("can't scan item: %v", err)
+			return nil, fmt.Errorf("can't scan row: %v", err)
 		}
 
-		var itemData models.Item
+		if orderData == nil {
+			orderData = &models.OrderData{}
 
-		itemData.ChrtID = itemDB.ChrtID
-		itemData.TrackNumber = itemDB.TrackNumber
-		itemData.Price = itemDB.Price
-		itemData.Rid = itemDB.Rid
-		itemData.Name = itemDB.Name
-		itemData.Sale = itemDB.Sale
-		itemData.Size = itemDB.Size
-		itemData.TotalPrice = itemDB.TotalPrice
-		itemData.NmID = itemDB.NmID
-		itemData.Brand = itemDB.Brand
-		itemData.Status = itemDB.Status
+			orderData.OrderUID = orderUID
+			orderData.TrackNumber = trackNumber
+			orderData.CustomerID = customerID
+			orderData.DeliveryService = deliveryService
+			orderData.DateCreated = dateCreated
 
-		orderData.Items = append(orderData.Items, itemData)
+			err = json.Unmarshal(deliveryData, &orderData.Delivery)
+			if err != nil {
+				return nil, fmt.Errorf("can't unmarshal delivery data: %v", err)
+			}
+
+			err := json.Unmarshal(paymentData, &orderData.Payment)
+			if err != nil {
+				return nil, fmt.Errorf("can't unmarshal payment data: %v", err)
+			}
+
+			err = json.Unmarshal(additionalData, &orderData.AdditionalData)
+			if err != nil {
+				return nil, fmt.Errorf("can't unmarshal additional data: %v", err)
+			}
+		}
+
+		item := models.Item{
+			ChrtID: chrtID, TrackNumber: itemTrackNumber, Price: price,
+			Rid: rid, Name: name, Sale: sale, Size: size, TotalPrice: totalPrice,
+			NmID: nmID, Brand: brand, Status: status,
+		}
+
+		orderData.Items = append(orderData.Items, item)
+	}
+	if err := orderRows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to scan rows: %v", err)
 	}
 
-	if err := items.Err(); err != nil {
-		return fmt.Errorf("error while items iteration: %v", err)
+	if orderData == nil {
+		return nil, storage.ErrNoOrder
 	}
 
-	return nil
+	return orderData, nil
 }
 
 func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
@@ -366,23 +320,7 @@ func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
 
 	order.DeliveryData = deliveryDataByte
 
-	var Additional struct {
-		Entry             string `json:"entry"`
-		Locale            string `json:"locale"`
-		InternalSignature string `json:"internal_signature"`
-		Shardkey          string `json:"shardkey"`
-		SmID              int    `json:"sm_id"`
-		OofShard          string `json:"oof_shard"`
-	}
-
-	Additional.Entry = orderData.Entry
-	Additional.Locale = orderData.Locale
-	Additional.InternalSignature = orderData.InternalSignature
-	Additional.Shardkey = orderData.Shardkey
-	Additional.SmID = orderData.SmID
-	Additional.OofShard = orderData.OofShard
-
-	additionalDataByte, err := json.Marshal(Additional)
+	additionalDataByte, err := json.Marshal(orderData.AdditionalData)
 	if err != nil {
 		return nil, fmt.Errorf("%s: can't marshal additional data: %v", fn, err)
 	}
@@ -415,32 +353,4 @@ func convertItems(orderUID string, itemsData []models.Item) ([]*ItemDB, error) {
 	}
 
 	return items, nil
-}
-
-func buildInsertQuery(tableName string, rowCount int, columns []string) string {
-	var sb strings.Builder
-
-	columnNames := strings.Join(columns, ",")
-
-	sb.WriteString(fmt.Sprintf("INSERT INTO %s (%s) VALUES ", tableName, columnNames))
-
-	for i := 0; i < rowCount; i++ {
-		start := i * len(columns)
-
-		var placeholders []string
-
-		for j := 0; j < len(columns); j++ {
-			placeholders = append(placeholders, fmt.Sprintf("$%d", start+j+1))
-		}
-
-		sb.WriteString(fmt.Sprintf("(%s)", strings.Join(placeholders, ",")))
-
-		if i < rowCount-1 {
-			sb.WriteString(",\n")
-		}
-	}
-
-	sb.WriteString(";")
-
-	return sb.String()
 }
