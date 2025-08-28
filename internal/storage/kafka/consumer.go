@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/YusovID/order-service/internal/config"
@@ -37,13 +38,14 @@ func NewConsumer(cfg config.Kafka, log *slog.Logger) (*Consumer, error) {
 	}, nil
 }
 
-func (c *Consumer) ProcessMessages(ctx context.Context, topic string, orderChan chan []byte, wg *sync.WaitGroup) {
+func (c *Consumer) ProcessMessages(ctx context.Context, topic string, orderChan, commitChan chan *sarama.ConsumerMessage, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
 		err := c.Consumer.Consume(ctx, []string{topic}, &consumerHandler{
-			OrderChan: orderChan,
-			Log:       c.Log,
+			OrderChan:  orderChan,
+			CommitChan: commitChan,
+			Log:        c.Log,
 		})
 		if err != nil {
 			if err == sarama.ErrClosedConsumerGroup {
@@ -60,8 +62,9 @@ func (c *Consumer) ProcessMessages(ctx context.Context, topic string, orderChan 
 }
 
 type consumerHandler struct {
-	OrderChan chan []byte
-	Log       *slog.Logger
+	OrderChan  chan *sarama.ConsumerMessage
+	CommitChan chan *sarama.ConsumerMessage
+	Log        *slog.Logger
 }
 
 func (h *consumerHandler) Setup(sarama.ConsumerGroupSession) error {
@@ -75,27 +78,39 @@ func (h *consumerHandler) Cleanup(sarama.ConsumerGroupSession) error {
 func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	processed := 0
 
-	for msg := range claim.Messages() {
-		h.Log.Info(
-			"recieved message",
-			slog.Int("partition", int(msg.Partition)),
-			slog.Int("offset", int(msg.Offset)),
-		)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-		session.MarkMessage(msg, "")
+	for {
+		select {
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
 
-		processed++
+			h.Log.Info(
+				"recieved message",
+				slog.Int("partition", int(msg.Partition)),
+				slog.Int("offset", int(msg.Offset)),
+			)
 
-		if processed >= batchsize {
-			h.Log.Info("commiting messages")
+			h.OrderChan <- msg
+
+		case msg := <-h.CommitChan:
+			session.MarkMessage(msg, "")
+
+			processed++
+
+			if processed >= batchsize {
+				h.Log.Info("commiting messages")
+				session.Commit()
+				processed = 0
+			}
+
+		case <-session.Context().Done():
 			session.Commit()
-			processed = 0
+
+			return nil
 		}
-
-		h.OrderChan <- msg.Value
 	}
-
-	session.Commit()
-
-	return nil
 }
