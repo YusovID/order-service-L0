@@ -54,6 +54,14 @@ func main() {
 
 	log.Info("cache init successful")
 
+	wg.Add(1)
+	go func() {
+		err := cache.Fill(ctx, storage, wg)
+		if err != nil {
+			log.Error("failed to fill cache", sl.Err(err))
+		}
+	}()
+
 	c, err := kafka.NewConsumer(cfg.Kafka, log)
 	if err != nil {
 		log.Error("failed to init consumer", sl.Err(err))

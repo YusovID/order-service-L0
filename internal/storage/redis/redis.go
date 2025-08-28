@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/internal/models"
 	"github.com/YusovID/order-service/internal/storage"
+	"github.com/YusovID/order-service/internal/storage/postgres"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -67,4 +69,28 @@ func (c *Client) GetOrder(ctx context.Context, orderUID string) (*models.OrderDa
 	}
 
 	return orderData, nil
+}
+
+func (c *Client) Fill(ctx context.Context, storage *postgres.Storage, wg *sync.WaitGroup) error {
+	const fn = "storage.redis.Fill"
+
+	defer wg.Done()
+
+	orders, err := storage.GetOrders(ctx)
+	if err != nil {
+		return fmt.Errorf("can't get orders: %v", err)
+	}
+
+	for _, order := range orders {
+		orderJSON, err := json.Marshal(order)
+		if err != nil {
+			return fmt.Errorf("%s: can't marshal order: %v", fn, err)
+		}
+
+		if err := c.Set(ctx, order.OrderUID, orderJSON, 0).Err(); err != nil {
+			return fmt.Errorf("%s: can't set order: %v", fn, err)
+		}
+	}
+
+	return nil
 }
