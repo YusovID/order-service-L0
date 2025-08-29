@@ -8,9 +8,11 @@ import (
 	"os/signal"
 	"sync"
 
+	"github.com/IBM/sarama"
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/internal/http-server/handlers/url/get"
 	mwLogger "github.com/YusovID/order-service/internal/http-server/middleware/logger"
+	processor "github.com/YusovID/order-service/internal/processor/order"
 	"github.com/YusovID/order-service/internal/storage/kafka"
 	"github.com/YusovID/order-service/internal/storage/postgres"
 	"github.com/YusovID/order-service/internal/storage/redis"
@@ -40,10 +42,13 @@ func main() {
 
 	log.Info("storage init successful")
 
-	orderChan := make(chan []byte)
+	orderChan := make(chan *sarama.ConsumerMessage)
+	commitChan := make(chan *sarama.ConsumerMessage)
+
+	processor := processor.New(storage, orderChan, commitChan, log)
 
 	wg.Add(1)
-	go storage.ProcessOrder(ctx, orderChan, wg)
+	go processor.ProcessOrders(ctx, wg)
 
 	cache, err := redis.New(ctx, cfg.Redis)
 	if err != nil {
@@ -56,13 +61,15 @@ func main() {
 
 	wg.Add(1)
 	go func() {
-		err := cache.Fill(ctx, storage, wg)
+		defer wg.Done()
+
+		err := cache.Fill(ctx, storage)
 		if err != nil {
 			log.Error("failed to fill cache", sl.Err(err))
 		}
 	}()
 
-	c, err := kafka.NewConsumer(cfg.Kafka, log)
+	c, err := kafka.NewConsumer(cfg.Kafka, orderChan, commitChan, log)
 	if err != nil {
 		log.Error("failed to init consumer", sl.Err(err))
 
@@ -77,7 +84,7 @@ func main() {
 	signal.Notify(sigchan, os.Interrupt)
 
 	wg.Add(1)
-	go c.ProcessMessages(ctx, cfg.Kafka.Topic, orderChan, wg)
+	go c.ProcessMessages(ctx, cfg.Kafka.Topic, wg)
 
 	router := chi.NewRouter()
 
@@ -87,7 +94,7 @@ func main() {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.URLFormat)
 
-	router.Get("/order/{order_uid}", get.New(ctx, log, cache, storage))
+	router.Get("/order/{order_uid}", get.New(log, cache, storage))
 
 	router.Handle("/", http.FileServer(http.Dir("./web")))
 
@@ -101,7 +108,10 @@ func main() {
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("failed to start server", sl.Err(err))
 
