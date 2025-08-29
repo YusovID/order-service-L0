@@ -15,11 +15,18 @@ import (
 const batchsize = 100
 
 type Consumer struct {
-	Consumer sarama.ConsumerGroup
-	Log      *slog.Logger
+	Consumer   sarama.ConsumerGroup
+	orderChan  chan<- *sarama.ConsumerMessage
+	commitChan <-chan *sarama.ConsumerMessage
+	log        *slog.Logger
 }
 
-func NewConsumer(cfg config.Kafka, log *slog.Logger) (*Consumer, error) {
+func NewConsumer(
+	cfg config.Kafka,
+	orderChan chan<- *sarama.ConsumerMessage,
+	commitChan <-chan *sarama.ConsumerMessage,
+	log *slog.Logger,
+) (*Consumer, error) {
 	config := sarama.NewConfig()
 
 	config.Consumer.Return.Errors = true
@@ -33,37 +40,46 @@ func NewConsumer(cfg config.Kafka, log *slog.Logger) (*Consumer, error) {
 	}
 
 	return &Consumer{
-		Consumer: cg,
-		Log:      log,
+		Consumer:   cg,
+		orderChan:  orderChan,
+		commitChan: commitChan,
+		log:        log,
 	}, nil
 }
 
-func (c *Consumer) ProcessMessages(ctx context.Context, topic string, orderChan, commitChan chan *sarama.ConsumerMessage, wg *sync.WaitGroup) {
+func (c *Consumer) ProcessMessages(ctx context.Context, topic string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for {
-		err := c.Consumer.Consume(ctx, []string{topic}, &consumerHandler{
-			OrderChan:  orderChan,
-			CommitChan: commitChan,
-			Log:        c.Log,
-		})
-		if err != nil {
-			if err == sarama.ErrClosedConsumerGroup {
-				c.Log.Info("consumer group closed, exiting process messages loop")
-				return
-			}
-			c.Log.Error("error from consumer", sl.Err(err))
-		}
+	const fn = "storage.kafka.ProcessMessages"
 
-		if ctx.Err() != nil {
+	log := c.log.With("fn", fn)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("stopping message processing")
 			return
+
+		default:
+			err := c.Consumer.Consume(ctx, []string{topic}, &consumerHandler{
+				orderChan:  c.orderChan,
+				commitChan: c.commitChan,
+				Log:        c.log,
+			})
+			if err != nil {
+				if err == sarama.ErrClosedConsumerGroup {
+					c.log.Info("consumer group closed, exiting process messages loop")
+					return
+				}
+				c.log.Error("error from consumer", sl.Err(err))
+			}
 		}
 	}
 }
 
 type consumerHandler struct {
-	OrderChan  chan *sarama.ConsumerMessage
-	CommitChan chan *sarama.ConsumerMessage
+	orderChan  chan<- *sarama.ConsumerMessage
+	commitChan <-chan *sarama.ConsumerMessage
 	Log        *slog.Logger
 }
 
@@ -94,9 +110,9 @@ func (h *consumerHandler) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 				slog.Int("offset", int(msg.Offset)),
 			)
 
-			h.OrderChan <- msg
+			h.orderChan <- msg
 
-		case msg := <-h.CommitChan:
+		case msg := <-h.commitChan:
 			session.MarkMessage(msg, "")
 
 			processed++
