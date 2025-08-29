@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -72,43 +71,6 @@ func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	}, nil
 }
 
-func (s *Storage) ProcessOrder(ctx context.Context, orderChan chan []byte, wg *sync.WaitGroup) {
-	defer wg.Done()
-	const fn = "storage.postgres.ProcessOrder"
-	log := s.log.With("fn", fn)
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("stopped processing order")
-			return
-
-		case order := <-orderChan:
-			// TODO добавить worker pool
-			go func() {
-				log.Info("received new order")
-
-				var orderData models.OrderData
-				if err := json.Unmarshal(order, &orderData); err != nil {
-					log.Error("can't unmarshal json", sl.Err(err))
-
-					return
-				}
-
-				log.Info("saving order in database")
-
-				if err := s.SaveOrder(ctx, &orderData); err != nil {
-					log.Error("failed to save order in database", sl.Err(err))
-
-					return
-				}
-
-				log.Info("saving was successful")
-			}()
-		}
-	}
-}
-
 func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (err error) {
 	const fn = "storage.postgres.SaveOrder"
 
@@ -149,6 +111,7 @@ func (s *Storage) saveOrder(ctx context.Context, tx *sqlx.Tx, orderData *models.
 			order.OrderUID, order.TrackNumber, order.CustomerID, order.DeliveryService,
 			order.DateCreated, order.PaymentData, order.DeliveryData, order.AdditionalData,
 		).
+		Suffix("ON CONFLICT (order_uid) DO NOTHING").
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("failed to build save order query: %v", err)
@@ -259,7 +222,7 @@ func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
 	for _, row := range joinedRows {
 		orderData, exists := ordersMap[row.OrderDB.OrderUID]
 		if !exists {
-			orderData, err := fillOrderData(row)
+			orderData, err = fillOrderData(row)
 			if err != nil {
 				return nil, fmt.Errorf("%s: can't fill order data: %v", fn, err)
 			}
