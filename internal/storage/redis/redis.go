@@ -6,17 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 
 	"github.com/YusovID/order-service/internal/config"
 	"github.com/YusovID/order-service/internal/models"
 	"github.com/YusovID/order-service/internal/storage"
-	"github.com/YusovID/order-service/internal/storage/postgres"
 	"github.com/redis/go-redis/v9"
 )
 
 type Client struct {
 	*redis.Client
+}
+
+type Storage interface {
+	GetOrders(ctx context.Context) ([]*models.OrderData, error)
 }
 
 func New(ctx context.Context, cfg config.Redis) (*Client, error) {
@@ -71,10 +73,8 @@ func (c *Client) GetOrder(ctx context.Context, orderUID string) (*models.OrderDa
 	return orderData, nil
 }
 
-func (c *Client) Fill(ctx context.Context, storage *postgres.Storage, wg *sync.WaitGroup) error {
+func (c *Client) Fill(ctx context.Context, storage Storage) error {
 	const fn = "storage.redis.Fill"
-
-	defer wg.Done()
 
 	orders, err := storage.GetOrders(ctx)
 	if err != nil {
