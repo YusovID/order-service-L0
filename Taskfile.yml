@@ -55,6 +55,11 @@ tasks:
       - docker ps
     silent: true
 
+  docker:build:
+    cmds:
+      - docker compose build
+    silent: true
+
   kafka:create_topic:
     desc: "creates topic '{{.KAFKA_TOPIC}}' for kafka"
     cmds:
