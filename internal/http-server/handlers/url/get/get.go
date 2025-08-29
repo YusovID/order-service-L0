@@ -26,7 +26,7 @@ type Storage interface {
 	GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error)
 }
 
-func New(ctx context.Context, log *slog.Logger, cache Storage, storage Storage) http.HandlerFunc {
+func New(log *slog.Logger, cache Storage, storage Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const fn = "handlers.url.get.New"
 
@@ -48,11 +48,11 @@ func New(ctx context.Context, log *slog.Logger, cache Storage, storage Storage) 
 
 		var orderData *models.OrderData
 
-		orderData, err := cache.GetOrder(ctx, orderUID)
+		orderData, err := cache.GetOrder(r.Context(), orderUID)
 		if errors.Is(err, strg.ErrNoOrder) {
 			log.Info("order not found in cache")
 
-			orderData, err = storage.GetOrder(ctx, orderUID)
+			orderData, err = storage.GetOrder(r.Context(), orderUID)
 			if errors.Is(err, strg.ErrNoOrder) {
 				log.Info("order not found", slog.String("order_uid", orderUID))
 
@@ -64,7 +64,7 @@ func New(ctx context.Context, log *slog.Logger, cache Storage, storage Storage) 
 			go func() {
 				log.Info("saving order in cache")
 
-				err = cache.SaveOrder(ctx, orderData)
+				err = cache.SaveOrder(r.Context(), orderData)
 				if err != nil {
 					log.Info("failed to save order in cache", sl.Err(err))
 				}
