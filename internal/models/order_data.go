@@ -11,8 +11,8 @@ type OrderData struct {
 
 	Items []Item `json:"items"`
 
-	Delivery   Delivery `json:"delivery"`
-	Payment    Payment  `json:"payment"`
+	Delivery Delivery `json:"delivery"`
+	Payment  Payment  `json:"payment"`
 	AdditionalData
 }
 
