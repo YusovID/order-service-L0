@@ -89,7 +89,6 @@ func (p *Processor) processBatch(ctx context.Context, orders []*sarama.ConsumerM
 
 			err := pool.Handle(ctx, currentOrder)
 			if err != nil {
-
 				p.log.Error("failed to handle order message", sl.Err(err))
 			} else {
 				p.commitChan <- currentOrder

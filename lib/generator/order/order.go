@@ -14,7 +14,7 @@ var (
 	banks            = []string{"alpha", "sber", "vtb", "tinkoff"}
 )
 
-func GenerateOrder() []byte {
+func GenerateOrder() (string, []byte) {
 	orderUID := gofakeit.UUID()
 	trackNumber := gofakeit.LetterN(4) + gofakeit.DigitN(8)
 	dateCreated := gofakeit.Date()
@@ -74,10 +74,10 @@ func GenerateOrder() []byte {
 	jsonData, err := json.Marshal(order)
 	if err != nil {
 		fmt.Println("Error marshaling to JSON:", err)
-		return nil
+		return "", nil
 	}
 
-	return jsonData
+	return orderUID, jsonData
 }
 
 func generateItem(trackNumber string) models.Item {

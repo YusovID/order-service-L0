@@ -83,10 +83,16 @@ func (p *Producer) ProduceMessage(ctx context.Context, topic string, wg *sync.Wa
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-		default:
-			order := orderGen.GenerateOrder()
 
-			err := p.PushMessageToQueue(topic, order)
+		default:
+			orderUID, order := orderGen.GenerateOrder()
+
+			msg := &sarama.ProducerMessage{}
+
+			msg.Key = sarama.StringEncoder(orderUID)
+			msg.Value = sarama.StringEncoder(order)
+
+			err := p.PushMessageToQueue(topic, msg)
 			if err != nil {
 				p.Log.Error("can't push message to queue", sl.Err(err))
 			}
@@ -98,13 +104,10 @@ func (p *Producer) ProduceMessage(ctx context.Context, topic string, wg *sync.Wa
 	}
 }
 
-func (p *Producer) PushMessageToQueue(topic string, message []byte) error {
-	msg := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.StringEncoder(message),
-	}
+func (p *Producer) PushMessageToQueue(topic string, message *sarama.ProducerMessage) error {
+	message.Topic = topic
 
-	p.Producer.Input() <- msg
+	p.Producer.Input() <- message
 
 	return nil
 }
@@ -112,20 +115,20 @@ func (p *Producer) PushMessageToQueue(topic string, message []byte) error {
 func (p *Producer) HandleResult(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	go func() {
-		for success := range p.Producer.Successes() {
+	for {
+		select {
+		case <-ctx.Done():
+			p.Log.Info("stopping to handle results")
+			return
+
+		case success := <-p.Producer.Successes():
 			p.Log.Info("message sent successfully",
 				slog.Int("partition", int(success.Partition)),
 				slog.Int64("offset", success.Offset),
 			)
-		}
-	}()
 
-	go func() {
-		for err := range p.Producer.Errors() {
+		case err := <-p.Producer.Errors():
 			p.Log.Error("failed to send message", sl.Err(err))
 		}
-	}()
-
-	<-ctx.Done()
+	}
 }
