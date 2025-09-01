@@ -19,6 +19,7 @@ tasks:
     silent: true
 
   go:run_order_generator:
+    desc: "runs order generator"
     cmds:
       - go run cmd/order-generator/main.go
     silent: true
@@ -36,34 +37,33 @@ tasks:
     silent: true
 
   docker:up:
+    desc: "builds and runs docker containters"
     cmds:
       - docker compose up -d
     silent: true
   
   docker:down:
+    desc: "stops and deletes docker containers"
     cmds:
       - docker compose down -v
     silent: true
   
   docker:restart:
+    desc: "restarts docker containers"
     cmds:
       - docker compose restart
     silent: true
 
   docker:list:
+    desc: "lists all running docker images"
     cmds:
       - docker ps
     silent: true
 
   docker:build:
+    desc: "builds all docker images"
     cmds:
       - docker compose build
-    silent: true
-
-  kafka:create_topic:
-    desc: "creates topic '{{.KAFKA_TOPIC}}' for kafka"
-    cmds:
-      - docker exec --workdir /opt/kafka/bin/ -it kafka sh ./kafka-topics.sh --create --topic {{.KAFKA_TOPIC}} --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
     silent: true
 
   default:
