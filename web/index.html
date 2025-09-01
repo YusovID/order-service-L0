@@ -6,12 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Информация о заказе</title>
     <style>
+        /* Общие стили для страницы */
         body {
             font-family: Arial, sans-serif;
             margin: 40px;
             background-color: #f4f4f4;
         }
 
+        /* Стили для основного контейнера, который центрирует контент */
         .container {
             max-width: 600px;
             margin: auto;
@@ -26,7 +28,9 @@
             color: #333;
         }
 
+        /* Стили для поля ввода ID заказа */
         input[type="text"] {
+            /* Вычисляем ширину так, чтобы поле и кнопка помещались в одну строку */
             width: calc(100% - 100px);
             padding: 10px;
             margin: 10px 0;
@@ -34,6 +38,7 @@
             border-radius: 4px;
         }
 
+        /* Стили для кнопки "Найти" */
         button {
             width: 90px;
             padding: 10px;
@@ -46,22 +51,29 @@
 
         button:hover {
             background-color: #4cae4c;
+            /* Цвет при наведении курсора */
         }
 
+        /* Стили для блока вывода результата (JSON) */
         pre {
             background-color: #eee;
             padding: 10px;
             border-radius: 4px;
             overflow-x: auto;
+            /* Добавляет горизонтальную прокрутку, если JSON слишком длинный */
             white-space: pre-wrap;
+            /* Позволяет переносить длинные строки */
             word-wrap: break-word;
+            /* Обеспечивает перенос слов */
         }
 
+        /* Стиль для сообщений об ошибках */
         .error {
             color: red;
             font-weight: bold;
         }
 
+        /* Стиль для отображения времени ответа от сервера */
         .response-time {
             font-size: 0.9em;
             color: #666;
@@ -75,44 +87,66 @@
     <div class="container">
         <h1>Поиск информации о заказе</h1>
         <div>
+            <!-- Поле для ввода ID заказа -->
             <input type="text" id="order_uid_input" placeholder="Введите ID заказа">
+            <!-- Кнопка, вызывающая функцию fetchOrder() при нажатии -->
             <button onclick="fetchOrder()">Найти</button>
         </div>
+        <!-- div, в который будет выводиться результат: данные заказа или ошибка -->
         <div id="result"></div>
     </div>
 
     <script>
+        // Асинхронная функция для получения и отображения данных о заказе.
         async function fetchOrder() {
+            // Получаем элемент поля ввода и его значение, убирая лишние пробелы.
             const order_uid = document.getElementById('order_uid_input').value.trim();
+            // Получаем элемент для вывода результата.
             const resultDiv = document.getElementById('result');
 
+            // Простая валидация: если поле пустое, выводим ошибку.
             if (!order_uid) {
                 resultDiv.innerHTML = '<p class="error">Пожалуйста, введите ID заказа.</p>';
                 return;
             }
 
+            // Показываем пользователю, что данные загружаются.
             resultDiv.innerHTML = '<p>Загрузка...</p>';
-            const startTime = performance.now(); // Записываем время начала запроса
+            // Засекаем время перед отправкой запроса для измерения производительности.
+            const startTime = performance.now();
 
             try {
+                // Отправляем GET-запрос к API нашего Go-сервиса.
+                // `await` приостанавливает выполнение функции, пока не будет получен ответ.
                 const response = await fetch(`http://localhost:8080/order/${order_uid}`);
-                const endTime = performance.now(); // Записываем время окончания запроса
-                const responseTime = (endTime - startTime).toFixed(2); // Вычисляем время ответа в мс
+                // Засекаем время после получения ответа.
+                const endTime = performance.now();
+                // Вычисляем и форматируем время ответа в миллисекундах.
+                const responseTime = (endTime - startTime).toFixed(2);
 
+                // Проверяем, успешен ли HTTP-статус ответа (200-299).
                 if (!response.ok) {
+                    // Если статус 404, значит заказ не найден.
                     if (response.status === 404) {
                         throw new Error('Заказ не найден.');
                     }
+                    // Для всех других ошибок (500, 400 и т.д.) выводим общее сообщение.
                     throw new Error('Ошибка при получении данных.');
                 }
 
+                // Парсим тело ответа из JSON в JavaScript-объект.
                 const data = await response.json();
+
+                // Формируем и вставляем HTML-код с результатом в `resultDiv`.
+                // JSON.stringify(data, null, 2) форматирует JSON с отступами для читаемости.
                 resultDiv.innerHTML = `
                     <h3>Данные заказа:</h3>
                     <p class="response-time">Время ответа: ${responseTime} мс</p>
                     <pre>${JSON.stringify(data, null, 2)}</pre>
                 `;
             } catch (error) {
+                // Если на любом из этапов в `try` произошла ошибка (сетевая, парсинг, статус),
+                // она будет поймана здесь, и мы выведем ее сообщение.
                 resultDiv.innerHTML = `<p class="error">${error.message}</p>`;
             }
         }

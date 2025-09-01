@@ -1,3 +1,7 @@
+// Package postgres предоставляет реализацию хранилища данных с использованием
+// базы данных PostgreSQL. Он отвечает за все операции CRUD (Create, Read, Update, Delete)
+// связанные с заказами. Пакет использует `sqlx` для удобной работы с SQL и
+// `squirrel` для декларативного построения запросов.
 package postgres
 
 import (
@@ -13,15 +17,20 @@ import (
 	"github.com/YusovID/order-service/internal/storage"
 	"github.com/YusovID/order-service/lib/logger/sl"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // Драйвер PostgreSQL.
 )
 
+// Storage инкапсулирует подключение к базе данных и предоставляет методы
+// для работы с данными заказов.
 type Storage struct {
 	db  *sqlx.DB
 	log *slog.Logger
-	sq  squirrel.StatementBuilderType
+	sq  squirrel.StatementBuilderType // Построитель запросов squirrel.
 }
 
+// OrderDB представляет структуру таблицы `orders` в базе данных.
+// Поля, хранящиеся в формате JSONB, представлены как json.RawMessage
+// для отложенного анмаршалинга.
 type OrderDB struct {
 	OrderUID        string          `db:"order_uid"`
 	TrackNumber     string          `db:"track_number"`
@@ -33,6 +42,7 @@ type OrderDB struct {
 	AdditionalData  json.RawMessage `db:"additional_data"`
 }
 
+// ItemDB представляет структуру таблицы `order_items` в базе данных.
 type ItemDB struct {
 	ID          int     `db:"id"`
 	OrderUID    string  `db:"order_uid"`
@@ -49,11 +59,15 @@ type ItemDB struct {
 	Status      int     `db:"status"`
 }
 
+// JoinedRow используется для сканирования результатов JOIN-запроса между
+// таблицами `orders` и `order_items`. Она встраивает обе структуры.
 type JoinedRow struct {
 	OrderDB
 	ItemDB
 }
 
+// New создает и возвращает новый экземпляр Storage, устанавливая
+// соединение с базой данных PostgreSQL.
 func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database,
@@ -71,6 +85,9 @@ func New(cfg config.Postgres, log *slog.Logger) (*Storage, error) {
 	}, nil
 }
 
+// SaveOrder сохраняет полную информацию о заказе (заказ и его товары)
+// в базу данных в рамках одной транзакции.
+// Если любая из операций вставки завершается ошибкой, вся транзакция откатывается.
 func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (err error) {
 	const fn = "storage.postgres.SaveOrder"
 
@@ -78,6 +95,8 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	if err != nil {
 		return fmt.Errorf("%s: can't start transaction: %v", fn, err)
 	}
+	// `defer` с именованным возвращаемым значением `err` гарантирует,
+	// что откат транзакции произойдет только в случае ошибки.
 	defer func() {
 		if err != nil {
 			if txErr := tx.Rollback(); txErr != nil {
@@ -96,6 +115,8 @@ func (s *Storage) SaveOrder(ctx context.Context, orderData *models.OrderData) (e
 	return tx.Commit()
 }
 
+// saveOrder (unexported) выполняет вставку одной записи в таблицу `orders`.
+// Использует `ON CONFLICT DO NOTHING` для игнорирования дубликатов по `order_uid`.
 func (s *Storage) saveOrder(ctx context.Context, tx *sqlx.Tx, orderData *models.OrderData) error {
 	order, err := convertOrder(orderData)
 	if err != nil {
@@ -125,6 +146,8 @@ func (s *Storage) saveOrder(ctx context.Context, tx *sqlx.Tx, orderData *models.
 	return nil
 }
 
+// saveItems (unexported) выполняет пакетную вставку товаров заказа в таблицу `order_items`.
+// Использует `NamedExecContext` для удобного маппинга полей структуры на параметры запроса.
 func (s *Storage) saveItems(ctx context.Context, tx *sqlx.Tx, itemsData []models.Item, orderUID string) error {
 	if len(itemsData) == 0 {
 		return nil
@@ -152,6 +175,8 @@ func (s *Storage) saveItems(ctx context.Context, tx *sqlx.Tx, itemsData []models
 	return nil
 }
 
+// GetOrder извлекает один заказ вместе со всеми его товарами по `order_uid`.
+// Выполняет JOIN-запрос и затем агрегирует результаты в одну структуру `models.OrderData`.
 func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderData, error) {
 	const fn = "storage.postgres.GetOrder"
 
@@ -178,12 +203,14 @@ func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderD
 		return nil, storage.ErrNoOrder
 	}
 
+	// Создаем основной объект заказа из первой строки.
 	firstRow := joinedRows[0]
 	orderData, err := fillOrderData(firstRow)
 	if err != nil {
 		return nil, fmt.Errorf("%s: can't fill order data: %v", fn, err)
 	}
 
+	// Добавляем все товары из всех полученных строк.
 	for _, row := range joinedRows {
 		appendItems(row, orderData)
 	}
@@ -191,6 +218,8 @@ func (s *Storage) GetOrder(ctx context.Context, orderUID string) (*models.OrderD
 	return orderData, nil
 }
 
+// GetOrders извлекает все заказы из базы данных.
+// Используется для первоначального заполнения кэша при старте сервиса.
 func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
 	const fn = "storage.postgres.GetOrders"
 
@@ -208,17 +237,16 @@ func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
 	}
 
 	var joinedRows []JoinedRow
-
 	if err := s.db.SelectContext(ctx, &joinedRows, query, args...); err != nil {
-		return nil, fmt.Errorf("%s: faield to execute get orders query: %v", fn, err)
+		return nil, fmt.Errorf("%s: failed to execute get orders query: %v", fn, err)
 	}
 
 	if len(joinedRows) == 0 {
 		return nil, storage.ErrNoOrder
 	}
 
+	// Используем мапу для группировки товаров по заказам.
 	ordersMap := make(map[string]*models.OrderData)
-
 	for _, row := range joinedRows {
 		orderData, exists := ordersMap[row.OrderDB.OrderUID]
 		if !exists {
@@ -226,15 +254,13 @@ func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: can't fill order data: %v", fn, err)
 			}
-
 			ordersMap[row.OrderDB.OrderUID] = orderData
 		}
-
 		appendItems(row, orderData)
 	}
 
+	// Преобразуем мапу в слайс.
 	orders := make([]*models.OrderData, 0, len(ordersMap))
-
 	for _, order := range ordersMap {
 		orders = append(orders, order)
 	}
@@ -242,6 +268,7 @@ func (s *Storage) GetOrders(ctx context.Context) ([]*models.OrderData, error) {
 	return orders, nil
 }
 
+// convertOrder преобразует модель `models.OrderData` в `OrderDB` для сохранения в БД.
 func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
 	order := &OrderDB{
 		OrderUID:        orderData.OrderUID,
@@ -265,9 +292,9 @@ func convertOrder(orderData *models.OrderData) (*OrderDB, error) {
 	return order, nil
 }
 
+// convertItems преобразует слайс `models.Item` в `[]ItemDB` для сохранения в БД.
 func convertItems(orderUID string, itemsData []models.Item) ([]ItemDB, error) {
 	items := make([]ItemDB, 0, len(itemsData))
-
 	for _, itemData := range itemsData {
 		items = append(items, ItemDB{
 			OrderUID:    orderUID,
@@ -284,10 +311,10 @@ func convertItems(orderUID string, itemsData []models.Item) ([]ItemDB, error) {
 			Status:      itemData.Status,
 		})
 	}
-
 	return items, nil
 }
 
+// fillOrderData создает `models.OrderData` из строки `JoinedRow`, полученной из БД.
 func fillOrderData(row JoinedRow) (*models.OrderData, error) {
 	orderData := &models.OrderData{
 		OrderUID:        row.OrderDB.OrderUID,
@@ -311,6 +338,7 @@ func fillOrderData(row JoinedRow) (*models.OrderData, error) {
 	return orderData, nil
 }
 
+// appendItems добавляет товар из `JoinedRow` в существующий `models.OrderData`.
 func appendItems(row JoinedRow, orderData *models.OrderData) {
 	orderData.Items = append(orderData.Items, models.Item{
 		ChrtID:      row.ItemDB.ChrtID,
