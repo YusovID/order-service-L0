@@ -17,7 +17,7 @@
 ## 🎬 Видео с демонстрацией работы
 
 <a href="https://drive.google.com/file/d/16aAi9g3XzIj07RcXdgMHFI5TlrhvOVih/view?usp=sharing" target="_blank">
-<img src="https://i.imgur.com/aV842vH.png" alt="Демонстрация работы сервиса" style="max-width:100%;" />
+<img src="./assets/preview.png" alt="Демонстрация работы сервиса" style="max-width:100%;" />
 </a>
 
 ## 🛠️ Технологии
