@@ -6,9 +6,9 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/YusovID/order-service/internal/models"
@@ -27,7 +27,7 @@ type Storage interface {
 // Это позволяет абстрагироваться от конкретной реализации worker pool.
 type IPool interface {
 	Create()
-	Handle(context.Context, *sarama.ConsumerMessage) error
+	Handle(context.Context, *sarama.ConsumerMessage)
 	Wait()
 }
 
@@ -74,26 +74,29 @@ func (p *Processor) ProcessOrders(ctx context.Context, wg *sync.WaitGroup) {
 	orders := make([]*sarama.ConsumerMessage, 0, wp.MaxWorkersCount)
 	pool := wp.New(p.processOrder) // Создаем пул воркеров с нашей функцией обработки.
 
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		// Если контекст отменен, обрабатываем оставшиеся сообщения и выходим.
 		case <-ctx.Done():
 			if len(orders) != 0 {
 				p.processBatch(ctx, orders, pool)
+				// Очищаем слайс для следующей пачки.
+				orders = make([]*sarama.ConsumerMessage, 0, wp.MaxWorkersCount)
 			}
 			log.Info("stopping processing order by context")
 			return
 
-		// Читаем новое сообщение из канала.
+		// Читаем новое сообщение из канала и добавляем его в слайс.
 		case order := <-p.orderChan:
 			orders = append(orders, order)
 
-			// Когда накоплена пачка, отправляем ее на обработку.
-			if len(orders) == wp.MaxWorkersCount {
-				p.processBatch(ctx, orders, pool)
-				// Очищаем слайс для следующей пачки.
-				orders = make([]*sarama.ConsumerMessage, 0, wp.MaxWorkersCount)
-			}
+		// Раз в секунду вычитываем пачку.
+		case <-ticker.C:
+			p.processBatch(ctx, orders, pool)
+			orders = make([]*sarama.ConsumerMessage, 0, wp.MaxWorkersCount)
 		}
 	}
 }
@@ -108,16 +111,9 @@ func (p *Processor) processBatch(ctx context.Context, orders []*sarama.ConsumerM
 		go func(currentOrder *sarama.ConsumerMessage) {
 			defer wg.Done()
 			// Передаем сообщение в пул. Handle заблокируется, пока не освободится воркер.
-			err := pool.Handle(ctx, currentOrder)
-			if err != nil {
-				// TODO реализовать retry + DLQ
+			pool.Handle(ctx, currentOrder)
 
-				// Если обработка не удалась, логируем ошибку. Сообщение не будет подтверждено.
-				p.log.Error("failed to handle order message", sl.Err(err))
-			} else {
-				// Если обработка успешна, отправляем сообщение в канал для коммита.
-				p.commitChan <- currentOrder
-			}
+			p.commitChan <- currentOrder
 		}(order)
 	}
 
@@ -127,7 +123,7 @@ func (p *Processor) processBatch(ctx context.Context, orders []*sarama.ConsumerM
 
 // processOrder является основной функцией-обработчиком одного сообщения.
 // Она десериализует JSON, валидирует данные и сохраняет их в хранилище.
-func (p *Processor) processOrder(ctx context.Context, order *sarama.ConsumerMessage) error {
+func (p *Processor) processOrder(ctx context.Context, order *sarama.ConsumerMessage) {
 	p.log.Info("received new order")
 
 	var orderData models.OrderData
@@ -135,20 +131,19 @@ func (p *Processor) processOrder(ctx context.Context, order *sarama.ConsumerMess
 	if err := json.Unmarshal(order.Value, &orderData); err != nil {
 		p.log.Error("can't unmarshal json, skipping message", sl.Err(err))
 		// Возвращаем nil, чтобы "пропустить" невалидное сообщение и подтвердить его,
-		// иначе оно будет постоянно повторяться. Если бы нужна была Dead Letter Queue,
-		// логика была бы другой.
-		return fmt.Errorf("can't unmarshal json: %v", err)
+		// иначе оно будет постоянно повторяться
+		return
 	}
 
 	p.log.Info("saving order in database", slog.String("order_uid", orderData.OrderUID))
 
 	// Сохраняем заказ в базу данных.
 	if err := p.Storage.SaveOrder(ctx, &orderData); err != nil {
+		// TODO реализовать retry + DLQ
+
 		p.log.Error("failed to save order in database", sl.Err(err))
-		return fmt.Errorf("failed to save order in database: %w", err)
+		return
 	}
 
 	p.log.Info("saving was successful", slog.String("order_uid", orderData.OrderUID))
-
-	return nil
 }
