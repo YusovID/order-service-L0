@@ -2,9 +2,6 @@
 
 version: '3'
 
-vars:
-  KAFKA_TOPIC: 'orders'
-
 tasks:
   go:run_order_service:
     desc: "runs order service"
@@ -46,6 +43,18 @@ tasks:
     desc: "stops and deletes docker containers"
     cmds:
       - docker compose down -v
+    silent: true
+
+  docker:start:
+    desc: "starts docker containters"
+    cmds:
+      - docker compose start
+    silent: true
+
+  docker:stop:
+    desc: "stops docker containers"
+    cmds:
+      - docker compose stop
     silent: true
   
   docker:restart:
