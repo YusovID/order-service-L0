@@ -98,7 +98,7 @@ func (c *Client) GetOrder(ctx context.Context, orderUID string) (*models.OrderDa
 // Fill загружает все заказы из основного хранилища (например, PostgreSQL)
 // и сохраняет их в Redis. Этот метод вызывается при старте приложения
 // для "прогрева" кэша, чтобы обеспечить быстрый доступ к уже существующим данным.
-func (c *Client) Fill(ctx context.Context, storage Storage) error {
+func (c *Client) Warm(ctx context.Context, storage Storage) error {
 	const fn = "storage.redis.Fill"
 
 	// Получаем все заказы из основного хранилища.

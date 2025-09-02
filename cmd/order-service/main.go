@@ -15,11 +15,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/IBM/sarama"
 	"github.com/YusovID/order-service/internal/config"
@@ -94,10 +96,12 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := cache.Fill(ctx, storage)
+		err := cache.Warm(ctx, storage)
 		if err != nil {
 			log.Error("failed to fill cache", sl.Err(err))
 		}
+
+		log.Info("cache was warmed")
 	}()
 
 	// Инициализируем Kafka-консьюмера.
@@ -128,6 +132,10 @@ func main() {
 
 	log.Info("starting server", slog.String("address", cfg.HTTPServer.Address))
 
+	defer func() {
+		log.Info("order service stopped")
+	}()
+
 	// Создаем и настраиваем HTTP-сервер.
 	srv := &http.Server{
 		Addr:         cfg.HTTPServer.Address,
@@ -142,16 +150,25 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := srv.ListenAndServe(); err != nil {
-			slog.Error("failed to start server", sl.Err(err))
-			os.Exit(1)
+			if !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("failed to start server", sl.Err(err))
+				os.Exit(1)
+			}
 		}
 	}()
 
 	// Ожидаем сигнал для начала graceful shutdown.
 	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, os.Interrupt)
+	signal.Notify(sigchan, os.Interrupt, syscall.SIGTERM)
 	<-sigchan
 	cancel() // Отменяем контекст, сигнализируя всем горутинам о завершении.
+
+	// Корректно останавливаем HTTP-сервер.
+	log.Info("stopping server")
+	if err := srv.Shutdown(context.Background()); err != nil {
+		log.Error("failed to shutdown server", sl.Err(err))
+		os.Exit(1)
+	}
 
 	// Ждем завершения всех фоновых процессов.
 	wg.Wait()
@@ -160,13 +177,6 @@ func main() {
 	log.Info("shutting down consumer")
 	if err = c.Consumer.Close(); err != nil {
 		slog.Error("failed to close consumer", sl.Err(err))
-		os.Exit(1)
-	}
-
-	// Корректно останавливаем HTTP-сервер.
-	log.Info("stopping server")
-	if err := srv.Shutdown(context.Background()); err != nil {
-		log.Error("failed to shutdown server", sl.Err(err))
 		os.Exit(1)
 	}
 }
