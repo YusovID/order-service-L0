@@ -17,11 +17,13 @@ const MaxWorkersCount = 10
 // для выполнения работы. Сама структура пуста, она используется как семафор.
 type Worker struct{}
 
+var workers = [MaxWorkersCount]*Worker{{}, {}, {}, {}, {}, {}, {}, {}, {}, {}}
+
 // Pool - это generic-структура для пула воркеров.
 // Она может работать с любым типом данных `Data`, который будет передаваться в обработчик.
 type Pool[Data any] struct {
-	pool    chan *Worker                              // Канал, который работает как семафор, ограничивая количество воркеров.
-	handler func(ctx context.Context, msg Data) error // Функция, которая будет выполнять основную работу.
+	pool    chan *Worker                        // Канал, который работает как семафор, ограничивая количество воркеров.
+	handler func(ctx context.Context, msg Data) // Функция, которая будет выполнять основную работу.
 }
 
 // New создает и возвращает новый экземпляр пула воркеров.
@@ -31,9 +33,9 @@ type Pool[Data any] struct {
 //
 // Возвращает:
 //   - *Pool[Data]: указатель на созданный пул.
-func New[Data any](handler func(ctx context.Context, msg Data) error) *Pool[Data] {
+func New[Data any](handler func(ctx context.Context, msg Data)) *Pool[Data] {
 	return &Pool[Data]{
-		pool:    make(chan *Worker, MaxWorkersCount),
+		pool:    make(chan *Worker, len(workers)),
 		handler: handler,
 	}
 }
@@ -41,8 +43,8 @@ func New[Data any](handler func(ctx context.Context, msg Data) error) *Pool[Data
 // Create "заполняет" пул воркерами. Этот метод нужно вызвать перед
 // началом обработки пачки задач, чтобы в канале появились "пропуски".
 func (p *Pool[Data]) Create() {
-	for range MaxWorkersCount {
-		p.pool <- &Worker{}
+	for _, w := range workers {
+		p.pool <- w
 	}
 }
 
@@ -52,22 +54,22 @@ func (p *Pool[Data]) Create() {
 // Как только воркер освобождается (из канала `pool` удается прочитать значение),
 // он "захватывается", выполняется функция `handler`, и после завершения
 // воркер возвращается обратно в пул.
-func (p *Pool[Data]) Handle(ctx context.Context, data Data) error {
+func (p *Pool[Data]) Handle(ctx context.Context, data Data) {
 	// Ожидаем, пока в канале `pool` появится свободный воркер.
 	w := <-p.pool
 
-	// `defer` гарантирует, что воркер вернется в пул, даже если `handler` запаникует.
-	defer func() { p.pool <- w }()
-
-	// Выполняем основную работу.
-	return p.handler(ctx, data)
+	// Запускаем новую горутину, в которой происходит основная работа
+	go func() {
+		p.handler(ctx, data)
+		p.pool <- w
+	}()
 }
 
 // Wait ожидает, пока все воркеры завершат свою работу и вернутся в пул.
 // Этот метод следует вызывать после того, как все задачи были отправлены
 // в `Handle`, чтобы дождаться их полного выполнения.
 func (p *Pool[Data]) Wait() {
-	for range MaxWorkersCount {
+	for range len(workers) {
 		// Блокируемся, читая из канала, пока он не наполнится всеми воркерами.
 		<-p.pool
 	}
