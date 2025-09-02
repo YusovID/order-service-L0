@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/YusovID/order-service/internal/models"
 	strg "github.com/YusovID/order-service/internal/storage"
@@ -49,6 +50,11 @@ type Storage interface {
 func New(log *slog.Logger, cache Storage, storage Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const fn = "handlers.url.get.New"
+
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		r = r.WithContext(ctx)
 
 		// Дополняем логгер контекстной информацией о текущем запросе.
 		log = log.With(
